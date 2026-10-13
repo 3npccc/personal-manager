@@ -1,0 +1,64 @@
+name: verify
+
+# WHY THIS EXISTS (O4)
+#
+# The whole first phase was driven by 45 cycles of
+#   "AI writes code -> user runs a .bat -> user pastes the log back -> AI fixes".
+# The user's own words: "来回跑脚本等日志也让人头疼".
+#
+# This workflow moves that verification onto a machine:
+#   AI pushes  ->  GitHub runs analyze + all tests  ->  AI reads the result
+#   through the public API (no log pasting, no waiting at the keyboard).
+#
+# It runs the SAME two commands as the local pipeline, in the SAME order as
+# stage5_build.bat, so the result means the same thing.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:        # allow manual trigger from the Actions tab
+
+jobs:
+  analyze-and-test:
+    name: analyze + test (all)
+    runs-on: windows-latest   # same OS as the developer machine, on purpose:
+                              # most bugs in this project were Windows-specific
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # subosito/flutter-action is the de-facto standard for Flutter on
+      # GitHub Actions (public source, referenced by the Flutter docs).
+      # If you prefer to avoid third-party actions entirely, replace this
+      # step with a manual `git clone https://github.com/flutter/flutter.git`
+      # of the same tag - it is slower but uses only the official source.
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.6
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      # Regenerate drift/drift code so the generated *.g.dart always matches
+      # the current schema. Prevents "works locally, fails in CI" surprises.
+      - name: build_runner
+        run: dart run build_runner build
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      # --concurrency=1 matters: each test file can build the whole AppShell
+      # (IndexedStack builds all 9 pages with drift streams). Running many
+      # isolates in parallel exhausted memory on the dev machine (C45).
+      - name: flutter test
+        run: flutter test --timeout=90s --concurrency=1
